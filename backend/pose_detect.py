@@ -4,6 +4,7 @@ from mediapipe.tasks.python import vision
 from mediapipe.tasks.python import BaseOptions
 import numpy as np
 import time
+from collections import deque
 
 def calculate_angle(a, b, c):
     a = np.array(a)
@@ -15,30 +16,56 @@ def calculate_angle(a, b, c):
 
     cosine_angle = np.dot(ba, bc) / (np.linalg.norm(ba) * np.linalg.norm(bc))
     cosine_angle = np.clip(cosine_angle, -1.0, 1.0)
-    angle = np.degrees(np.arccos(cosine_angle))
+    return np.degrees(np.arccos(cosine_angle))
 
-    return angle
+def get_point_3d(lm):
+    return [lm.x, lm.y, lm.z]
 
 options = vision.PoseLandmarkerOptions(
     base_options=BaseOptions(model_asset_path="backend/pose_landmarker.task"),
-    running_mode=vision.RunningMode.VIDEO
+    running_mode=vision.RunningMode.VIDEO,
+    output_segmentation_masks=False
 )
 
-cap = cv2.VideoCapture("backend/videos/bowling.mp4")
+
+def get_world_point(lm):
+    return [lm.x, lm.y, lm.z]
+
+
+cap = cv2.VideoCapture("backend/videos/bowling2.mp4")
+
+smooth = {
+    'left_leg':   deque(maxlen=5),
+    'right_leg':  deque(maxlen=5),
+    'left_arm':   deque(maxlen=5),
+    'right_arm':  deque(maxlen=5),
+    'spine':      deque(maxlen=5),
+}
+
+def smooth_angle(buf, new_val):
+    buf.append(new_val)
+    return sum(buf) / len(buf)
 
 with vision.PoseLandmarker.create_from_options(options) as landmarker:
+
 
     while cap.isOpened():
         ret, frame = cap.read()
         if not ret:
             break
 
+        timestamp = int(time.time() * 1000)
+
         frame = cv2.resize(frame, (800, 600))
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-
         mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
-        timestamp = int(time.time() * 1000)
+    
         result = landmarker.detect_for_video(mp_image, timestamp)
+
+        if result.pose_landmarks and result.pose_world_landmarks:
+            world = result.pose_world_landmarks[0]
+        else:
+            continue
 
         if result.pose_landmarks:
             h, w, _ = frame.shape
@@ -62,28 +89,45 @@ with vision.PoseLandmarker.create_from_options(options) as landmarker:
             hip = points[23]
             knee = points[25]
             ankle = points[27]
-            angle_left_leg = calculate_angle(hip, knee, ankle)
+            angle_left_leg = smooth_angle(smooth['left_leg'], calculate_angle(
+            get_world_point(world[23]),
+            get_world_point(world[25]),
+            get_world_point(world[27])
+            ))
             cv2.putText(frame, str(int(angle_left_leg)), knee,
                         cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0,255,255), 2)
 
             hip_r = points[24]
             knee_r = points[26]
             ankle_r = points[28]
-            angle_right_leg = calculate_angle(hip_r, knee_r, ankle_r)
+            angle_right_leg = smooth_angle(smooth['right_leg'], calculate_angle(
+            get_world_point(world[24]),
+            get_world_point(world[26]),
+            get_world_point(world[28])
+            ))
             cv2.putText(frame, str(int(angle_right_leg)), knee_r,
                         cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255,255,0), 2)
 
             shoulder_l = points[11]
             elbow_l = points[13]
             wrist_l = points[15]
-            angle_left_arm = calculate_angle(shoulder_l, elbow_l, wrist_l)
+            angle_left_arm = smooth_angle(smooth['left_arm'], calculate_angle(
+            get_world_point(world[11]),
+            get_world_point(world[13]),
+            get_world_point(world[15])
+            ))
+
             cv2.putText(frame, str(int(angle_left_arm)), elbow_l,
                         cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0,255,255), 2)
 
             shoulder_r = points[12]
             elbow_r = points[14]
             wrist_r = points[16]
-            angle_right_arm = calculate_angle(shoulder_r, elbow_r, wrist_r)
+            angle_right_arm = smooth_angle(smooth['right_arm'], calculate_angle(
+            get_world_point(world[12]),
+            get_world_point(world[14]),
+            get_world_point(world[16])
+            ))
             cv2.putText(frame, str(int(angle_right_arm)), elbow_r,
                         cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0,255,255), 2)
 
@@ -91,9 +135,12 @@ with vision.PoseLandmarker.create_from_options(options) as landmarker:
             hip_mid = points[23]
             dx = shoulder[0] - hip_mid[0]
             dy = shoulder[1] - hip_mid[1]
-            spine_angle = np.degrees(np.arctan2(dy, dx))
-            cv2.putText(frame, str(int(spine_angle)), hip_mid,
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255,0,255), 2)
+            angle_spine = smooth_angle(smooth['spine'], np.degrees(np.arctan2(
+            world[11].y - world[23].y,
+            world[11].x - world[23].x
+            )))
+            cv2.putText(frame, str(int(angle_spine)), hip_mid,
+            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255,0,255), 2)
 
         cv2.imshow("Pose Detection", frame)
 
@@ -107,8 +154,7 @@ with vision.PoseLandmarker.create_from_options(options) as landmarker:
           key2 = cv2.waitKey(0) & 0xFF
           if key2 == ord('p'):
             break
-
-    timestamp = int(time.time() * 1000)
+        
 
 cap.release()
 cv2.destroyAllWindows()
