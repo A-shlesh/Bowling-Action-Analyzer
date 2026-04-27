@@ -8,12 +8,10 @@ import os
 import hashlib
 from collections import deque
 
-# ── Config ────────────────────────────────────────────────────────────────────
 VIDEO_PATH  = "backend/videos/bowling2.mp4"
 MODEL_PATH  = "backend/pose_landmarker.task"
 OUTPUT_DIR  = "backend/output"
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
 def calculate_angle(a, b, c):
     a, b, c = np.array(a), np.array(b), np.array(c)
     ba, bc = a - b, c - b
@@ -33,7 +31,6 @@ def get_output_path(video_path):
         file_hash = hashlib.md5(f.read(1024 * 1024)).hexdigest()[:8]
     return os.path.join(OUTPUT_DIR, f"{video_name}_{file_hash}.mp4")
 
-# ── Setup ─────────────────────────────────────────────────────────────────────
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 output_path = get_output_path(VIDEO_PATH)
@@ -80,7 +77,6 @@ writer = cv2.VideoWriter(
 print(f"Processing: {VIDEO_PATH}")
 print(f"Output    : {output_path}")
 
-# ── Main loop ─────────────────────────────────────────────────────────────────
 with vision.PoseLandmarker.create_from_options(options) as landmarker:
 
     while cap.isOpened():

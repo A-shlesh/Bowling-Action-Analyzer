@@ -7,3 +7,4 @@ backend/output/
 __pycache__/
 *.pyc
 .env
+*.task
