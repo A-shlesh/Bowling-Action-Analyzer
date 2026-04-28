@@ -5,6 +5,7 @@ from mediapipe.tasks.python import BaseOptions
 import numpy as np
 import time
 import os
+import json
 import hashlib
 from collections import deque
 
@@ -31,9 +32,20 @@ def get_output_path(video_path):
         file_hash = hashlib.md5(f.read(1024 * 1024)).hexdigest()[:8]
     return os.path.join(OUTPUT_DIR, f"{video_name}_{file_hash}.mp4")
 
+def get_joint_color(visibility):
+    if visibility > 0.8:
+        return (0, 255, 0)      
+    elif visibility > 0.5:
+        return (0, 165, 255)    
+    else:
+        return (0, 0, 255)      
+
+# ── Setup ─────────────────────────────────────────────────────────────────────
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 output_path = get_output_path(VIDEO_PATH)
+json_path   = output_path.replace(".mp4", "_angles.json")
+
 if os.path.exists(output_path):
     print(f"Already processed: {output_path}")
     exit()
@@ -74,8 +86,13 @@ writer = cv2.VideoWriter(
     (orig_w, orig_h)
 )
 
-print(f"Processing: {VIDEO_PATH}")
-print(f"Output    : {output_path}")
+frame_data = []   
+frame_count = 0
+prev_time   = time.time()
+
+print(f"Processing : {VIDEO_PATH}")
+print(f"Output     : {output_path}")
+print(f"Angle JSON : {json_path}")
 
 with vision.PoseLandmarker.create_from_options(options) as landmarker:
 
@@ -86,12 +103,18 @@ with vision.PoseLandmarker.create_from_options(options) as landmarker:
 
         timestamp = int(time.time() * 1000)
 
-        small     = cv2.resize(frame, (480, 360))
-        rgb       = cv2.cvtColor(small, cv2.COLOR_BGR2RGB)
-        mp_image  = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
-        result    = landmarker.detect_for_video(mp_image, timestamp)
+        small    = cv2.resize(frame, (480, 360))
+        rgb      = cv2.cvtColor(small, cv2.COLOR_BGR2RGB)
+        mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
+        result   = landmarker.detect_for_video(mp_image, timestamp)
 
         frame = cv2.resize(frame, (orig_w, orig_h))
+
+        curr_time = time.time()
+        fps_display = int(1 / (curr_time - prev_time + 1e-6))
+        prev_time = curr_time
+        cv2.putText(frame, f"FPS: {fps_display}", (10, 30),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
 
         if result.pose_landmarks and result.pose_world_landmarks:
             world  = result.pose_world_landmarks[0]
@@ -101,7 +124,8 @@ with vision.PoseLandmarker.create_from_options(options) as landmarker:
             for lm in result.pose_landmarks[0]:
                 cx, cy = int(lm.x * w), int(lm.y * h)
                 points.append((cx, cy))
-                cv2.circle(frame, (cx, cy), 4, (0, 255, 0), -1)
+                color = get_joint_color(lm.visibility)
+                cv2.circle(frame, (cx, cy), 4, color, -1)
 
             for c in connections:
                 cv2.line(frame, points[c[0]], points[c[1]], (255, 0, 0), 2)
@@ -145,8 +169,20 @@ with vision.PoseLandmarker.create_from_options(options) as landmarker:
             cv2.putText(frame, str(int(angle_spine)), points[23],
                         cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255,0,255), 2)
 
+            frame_data.append({
+                "frame":     frame_count,
+                "timestamp": round(frame_count / fps, 3),
+                "left_leg":  int(angle_left_leg),
+                "right_leg": int(angle_right_leg),
+                "left_arm":  int(angle_left_arm),
+                "right_arm": int(angle_right_arm),
+                "spine":     int(angle_spine),
+                "fps":       fps_display
+            })
+
         writer.write(frame)
         cv2.imshow("Pose Detection", frame)
+        frame_count += 1
 
         key = cv2.waitKey(1) & 0xFF
         if key == ord('q'):
@@ -156,7 +192,16 @@ with vision.PoseLandmarker.create_from_options(options) as landmarker:
                 if cv2.waitKey(0) & 0xFF == ord('p'):
                     break
 
+with open(json_path, "w") as f:
+    json.dump({
+        "video":        VIDEO_PATH,
+        "total_frames": frame_count,
+        "fps":          fps,
+        "frames":       frame_data
+    }, f, indent=2)
+
 cap.release()
 writer.release()
 cv2.destroyAllWindows()
-print(f"Saved: {output_path}")
+print(f"Saved video : {output_path}")
+print(f"Saved JSON  : {json_path}")
